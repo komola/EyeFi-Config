@@ -91,7 +91,7 @@ void print_configured_nets(void)
 		printf("error issuing print networks command: %d\n", ret);
 		return;
 	}
-       	configured = eyefi_response();
+	configured = eyefi_response();
 	if (configured->nr == 0) {
 		printf("No wireless networks configured on card\n");
 		return;
@@ -110,7 +110,7 @@ int try_connection_to(char *essid, char *ascii_password)
 
 	eyefi_printf("trying to connect to network: '%s'\n", essid);
 	if (ascii_password)
-	       	eyefi_printf(" with passphrase: '%s'\n", ascii_password);
+		eyefi_printf(" with passphrase: '%s'\n", ascii_password);
 	fflush(NULL);
 
 	// test network
@@ -122,10 +122,9 @@ int try_connection_to(char *essid, char *ascii_password)
 	char rsp = '\0';
 	ret = -1;
 	for (i=0; i < 200; i++) {
-		struct byte_response *r;
+		char *rsp_ptr = eyefi_response();
 		issue_noarg_command('s');
-		r = eyefi_response();
-		rsp = r->response;
+		rsp = *rsp_ptr;
 		char *state = net_test_state_name(rsp);
 		debug_printf(3, "net state: 0x%02x name: '%s'\n", rsp, state);
 		if (rsp == last_rsp) {
@@ -136,7 +135,7 @@ int try_connection_to(char *essid, char *ascii_password)
 				eyefi_printf("\nTesting connecion to '%s' (%d): %s", essid, rsp, state);
 			last_rsp = rsp;
 		}
-		
+
 		if (!strcmp("success", state)) {
 			ret = 0;
 			break;
@@ -218,7 +217,6 @@ void handle_transfer_mode(char *arg)
 
 void handle_endless(char *arg)
 {
-	char *state;
 	if (arg) {
 		int percentage;
 		if (!strcmp(arg, "enable")) {
@@ -243,9 +241,9 @@ void handle_wifi_onoff(char *arg)
 {
 	char *state;
 	if (arg) {
-		if (!strcmp(arg, "enabled")) {
+		if (!strcmp(arg, "enable")) {
 			wlan_disable(0);
-		} else if (!strcmp(arg, "disabled")) {
+		} else if (!strcmp(arg, "disable")) {
 			wlan_disable(1);
 		} else {
 			printf("unknown wifi state, ignoring: '%s'\n", arg);
@@ -318,7 +316,7 @@ void open_error(char *file, int ret)
 void usage(void)
 {
 	printf("Usage:\n");
-	printf("  eyefitest [OPTIONS]\n");
+	printf("  eyefi-config [OPTIONS]\n");
 	printf("  -a ESSID	add network (implies test unless --force)\n");
 	printf("  -t ESSID	test network\n");
 	printf("  -p KEY	set WPA key for add/test\n");
@@ -353,10 +351,62 @@ int is_long_opt(int cint, struct option *long_options)
 	return 0;
 }
 
+#define __stringify_1(x...)     #x
+#define __stringify(x...)       __stringify_1(x)
+
+#define EYEFI_ARG(arg) {		\
+	.long_opt = __stringify(arg),	\
+}
+
+struct eyefi_arg {
+	char *long_opt;
+	int (*func)(char *);
+	char *arg_val;
+	int tmpvar;
+};
+
+struct eyefi_arg eyefi_args[] = {
+	EYEFI_ARG(force),
+};
+
+int arg_is_set(char *argv)
+{
+	int i;
+	for (i = 0; i < ARRAY_SIZE(eyefi_args); i++) {
+		struct eyefi_arg *arg = &eyefi_args[i];
+		if (!strcmp(argv, arg->long_opt)) {
+			return arg->tmpvar;
+		}
+	}
+	return 0;
+}
+
+struct option *init_args(struct option *extra, int len)
+{
+	int i;
+	struct option *long_options;
+	int longopt_nr = 0;
+
+	long_options = malloc(sizeof(struct option) * ARRAY_SIZE(eyefi_args) + len);
+	for (i = 0; i < len; i++) {
+		memcpy(&long_options[longopt_nr++], &extra[i],
+				sizeof(struct option));
+	}
+	for (i = 0; i < ARRAY_SIZE(eyefi_args); i++) {
+		struct option *opt = &long_options[longopt_nr++];
+
+		opt->name = eyefi_args[i].long_opt;
+		opt->has_arg = 2;
+		opt->flag = &eyefi_args[i].tmpvar;
+		opt->val = 1;
+	}
+	return long_options;
+}
+
 int main(int argc, char *argv[])
 {
-        int option_index;
-        char c;
+	int option_index;
+	char c;
 	int cint;
 	char *essid = NULL;
 	char *passwd = NULL;
@@ -365,29 +415,50 @@ int main(int argc, char *argv[])
 	static int transfer_mode = 0;
 	static int wifi_radio_on = 0;
 	static int endless = 0;
+	static int eject = 0;
+	static int debug_level_opt = 0;
 	static struct option long_options[] = {
-		//{"wep", 'x', &passed_wep, 1},
-		//{"wpa", 'y', &passed_wpa, 1},
 		{"force", 	  0, &force, 1},
 		{"help",	  0,   NULL, 'h'},
 		{"transfer-mode", 2, &transfer_mode, 1},
 		{"wifi-radio",    2, &wifi_radio_on, 1},
 		{"endless",       2, &endless,       1},
+		{"eject",	  2, &eject,	     1},
+		{"debug",	  2, &debug_level_opt, 'd'},
 		{0, 0, 0, 0}
 	};
 
 	if (argc == 1)
 		usage();
 
+	char optarg_shorts[] = "a:bcd:kflmp:r:st:z";
+	while ((cint = getopt_long_only(argc, argv, optarg_shorts,
+		&long_options[0], &option_index)) != -1) {
+		c = cint;
+		// Process the debug option first and out-of-order
+		if ((c == 'd') || (debug_level_opt != 0)) {
+			fprintf(stderr, "set debug level to: %d\n", eyefi_debug_level);
+			eyefi_debug_level = atoi(optarg);
+			debug_level_opt = 0;
+		}
+	}
+	// Internal getopt() variable, needs to be reset
+	// to force it to restart the arg scan:
+	optind = 0;
+
 	debug_printf(3, "%s starting...\n", argv[0]);
 
-        debug_printf(3, "about to parse arguments\n");
-        debug_printf(4, "argc: %d\n", argc);
-        debug_printf(4, "argv: %p\n", argv);
-        while ((cint = getopt_long_only(argc, argv, "a:bcd:kflmp:r:st:z",
-                        &long_options[0], &option_index)) != -1) {
+	debug_printf(3, "about to parse arguments\n");
+	debug_printf(4, "argc: %d\n", argc);
+	debug_printf(4, "argv: %p\n", argv);
+	while ((cint = getopt_long_only(argc, argv, optarg_shorts,
+		&long_options[0], &option_index)) != -1) {
 		c = cint;
-        	debug_printf(3, "argument: '%c' %d optarg: '%s'\n", c, c, optarg);
+		debug_printf(3, "argument: '%c' %d optarg: '%s'\n", c, c, optarg);
+		if (eject) {
+			eject_card();
+			exit(0);
+		}
 		if (transfer_mode) {
 			handle_transfer_mode(optarg);
 			transfer_mode = 0;
@@ -420,8 +491,7 @@ int main(int argc, char *argv[])
 			print_configured_nets();
 			break;
 		case 'd':
-			eyefi_debug_level = atoi(optarg);
-			fprintf(stderr, "set debug level to: %d\n", eyefi_debug_level);
+			// We handled this above
 			break;
 		case 'f':
 			print_card_firmware_info();

@@ -9,28 +9,30 @@
  */
 
 #include "eyefi-config.h"
+#include <sys/mman.h>
 
 int eyefi_debug_level = 1;
 
 int eyefi_printf(const char *fmt, ...)
 {
-        va_list args;
-        int r;
+	va_list args;
+	int r;
 
-        va_start(args, fmt);
-        r = vprintf(fmt, args);
-        va_end(args);
+	va_start(args, fmt);
+	r = vprintf(fmt, args);
+	va_end(args);
 
-        return r;
+	return r;
 }
 
-static char *eyefi_file_name(enum eyefi_file file)
+char *eyefi_file_name(enum eyefi_file file)
 {
 	switch (file) {
 	case REQC: return "reqc";
 	case REQM: return "reqm";
 	case RSPC: return "rspc";
 	case RSPM: return "rspm";
+	case RDIR: return "";
 	}
 
 	return NULL;
@@ -65,46 +67,46 @@ void *eyefi_response(void)
 
 int __dumpbuf(const char *buffer, int bytesToWrite, int per_line)
 {
-    int ret = 0;
-    int i;
-    static char linebuf[500];
+	int ret = 0;
+	int i;
+	static char linebuf[500];
 
-    for (i=0; i < bytesToWrite; i += per_line) {
-        char *tmpbuf = &linebuf[0];
-        unsigned long sum = 0;
-        int j;
+	for (i=0; i < bytesToWrite; i += per_line) {
+	char *tmpbuf = &linebuf[0];
+	    unsigned long sum = 0;
+	    int j;
 #define lprintf(args...)        do {            \
-        tmpbuf += sprintf(tmpbuf, ## args);\
+	    tmpbuf += sprintf(tmpbuf, ## args);\
 } while (0)
 
-        lprintf("[%03d]: ", i);
-        for (j=0; j < per_line; j++) {
-                u8 c = ((unsigned char *)buffer)[i+j];
-                lprintf("%02x ", (unsigned int)c);
-                sum += c;
-        }
-        lprintf(" |");
-        for (j=0; j < per_line; j++) {
-                u8 c = ((unsigned char *)buffer)[i+j];
-                if (c >= 'a' && c <= 'z')
-                        lprintf("%c", c);
-                else if (c >= 'A' && c <= 'Z')
-                        lprintf("%c", c);
-                else if (c >= '0' && c <= '9')
-                        lprintf("%c", c);
-                else if (c >= 0x20 && c <= 127)
-                        lprintf("%c", c);
-                else
-                        lprintf(".");
-        }
-        lprintf("|\n");
-        if (sum == 0)
-                continue;
-        ret += printf("%s", linebuf);
-        //if (i > 200)
-        //      break;
-    }
-    return ret;
+	    lprintf("[%03d]: ", i);
+	    for (j=0; j < per_line; j++) {
+	            u8 c = ((unsigned char *)buffer)[i+j];
+	            lprintf("%02x ", (unsigned int)c);
+	            sum += c;
+	    }
+	    lprintf(" |");
+	    for (j=0; j < per_line; j++) {
+	            u8 c = ((unsigned char *)buffer)[i+j];
+	            if (c >= 'a' && c <= 'z')
+	                    lprintf("%c", c);
+	            else if (c >= 'A' && c <= 'Z')
+	                    lprintf("%c", c);
+	            else if (c >= '0' && c <= '9')
+	                    lprintf("%c", c);
+	            else if (c >= 0x20 && c <= 127)
+	                    lprintf("%c", c);
+	            else
+	                    lprintf(".");
+	    }
+	    lprintf("|\n");
+	    if (sum == 0)
+	            continue;
+	    ret += printf("%s", linebuf);
+	    //if (i > 200)
+	    //      break;
+	}
+	return ret;
 }
 
 int dumpbuf(const char *buffer, int bytesToWrite)
@@ -152,8 +154,8 @@ void zero_card_files(void)
 	char zbuf[EYEFI_BUF_SIZE];
 
 	memset(&zbuf[0], 0, EYEFI_BUF_SIZE);
-	write_to(REQM, zbuf, EYEFI_BUF_SIZE);
-	write_to(REQC, zbuf, EYEFI_BUF_SIZE);
+//	write_to(REQM, zbuf, EYEFI_BUF_SIZE);
+//	write_to(REQC, zbuf, EYEFI_BUF_SIZE);
 	write_to(RSPM, zbuf, EYEFI_BUF_SIZE);
 //	write_to(RSPC, zbuf, EYEFI_BUF_SIZE);
 
@@ -181,7 +183,7 @@ void init_card()
 		eyefi_seq.seq = 0x1234;
 	eyefi_seq.seq++;
 	debug_printf(2, "Done initializing card...\n");
-	debug_printf(2, "seq was: %04x\n", eyefi_seq.seq);
+	debug_printf(3, "seq was: %04x\n", eyefi_seq.seq);
 }
 
 static char *eyefi_file(enum eyefi_file file)
@@ -190,11 +192,63 @@ static char *eyefi_file(enum eyefi_file file)
 	return eyefi_file_on(file, locate_eyefi_mount());
 }
 
+int majflts(void)
+{
+	static char buf[1000];
+	static char garb[1000];
+	int min_flt;
+	int cmin_flt;
+	int maj_flt;
+	int cmaj_flt;
+	int gi;
+	int fd;
+
+	// touch it beforehand so it doesn't fault
+	memset(buf, 0, 1000);
+	memset(garb, 0, 1000);
+
+	fd = open("/proc/self/stat", O_RDONLY);
+	read(fd, buf, 1000);
+	sscanf(buf, "%d %s %s %d %d %d %d %d %d %d %d %d %d %s",
+		&gi, garb, garb, &gi, &gi, &gi, &gi, &gi, &gi,
+		&min_flt, &cmin_flt, &maj_flt, &cmaj_flt,
+		garb);
+	//printf("%d %d %d %d\n", min_flt, cmin_flt, maj_flt, cmaj_flt);
+	close(fd);
+	return maj_flt+cmaj_flt;
+}
+
+// How many pages just came in from the disk?
+int nr_fresh_pages(int fd, int len)
+{
+	int PAGE_SIZE = getpagesize();
+	int faults_before;
+	int faults_after;
+	char *addr;
+	int tmp;
+	int i;
+
+	addr = mmap(NULL, len, PROT_READ, MAP_FILE|MAP_SHARED, fd, 0);
+	//intf("addr: %p\n", addr);
+	faults_before = majflts();
+	for (i = 0; i < len; i += PAGE_SIZE) {
+		tmp += addr[i];
+	}
+	faults_after = majflts();
+	munmap(addr, len);
+	debug_printf(3, "%s(%d) faults_before: %d faults_after: %d net: %d\n",
+			__func__, fd,
+			faults_before, faults_after, (faults_after - faults_before));
+	return (faults_after - faults_before);
+}
+
 void read_from(enum eyefi_file __file)
 {
+	int tries = 0;
 	int ret;
 	int fd;
 	char *file = eyefi_file(__file);
+	int nr_fresh;
 
 	init_card();
 
@@ -203,9 +257,26 @@ retry:
 	if (fd < 0)
 		open_error(file, fd);
 	fd_flush(fd);
+	// fd_flush() does not appear to be working 100% of the
+	// time.  It is not working on my Thinkpad, but works
+	// fine on the same kernel on the Ideapad.  Bizarre.
+	// This at least works around it by detecting when we
+	// did and did not actually bring in pages from the
+	// disk.
+	nr_fresh = nr_fresh_pages(fd, EYEFI_BUF_SIZE);
+	if (!nr_fresh) {
+		tries++;
+		debug_printf(2, "fd_flush(%d) was unsuccessful(%d), retrying (%d)...\n",
+				fd, nr_fresh, tries);
+		close(fd);
+		goto retry;
+	}
 	ret = read(fd, eyefi_buf, EYEFI_BUF_SIZE);
-	if (eyefi_debug_level > 3)
+	if ((eyefi_debug_level >= 3) ||
+	    (eyefi_debug_level >= 2 && (__file == RSPM))) {
+		printf("%s:", eyefi_file_name(__file));
 		dumpbuf(eyefi_buf, 128);
+	}
 	if (ret < 0) {
 		close(fd);
 		perror("bad read, retrying...");
@@ -244,21 +315,20 @@ void write_to(enum eyefi_file __file, void *stuff, int len)
 		return;
 
 	init_card();
-       	file = eyefi_file(__file);
+	file = eyefi_file(__file);
 	if (len == -1)
 		len = strlen(stuff);
 
-	if (eyefi_debug_level > 3) {
-		debug_printf(3, "%s('%s', ..., %d)\n", __func__, file, len);
-		dumpbuf(stuff, len);
-	}
 	memset(eyefi_buf, 0, EYEFI_BUF_SIZE);
 	memcpy(eyefi_buf, stuff, len);
 	fd = open(file, O_RDWR|O_CREAT, 0600);
 	if (fd < 0 )
 		open_error(file, fd);
-	if (eyefi_debug_level > 3)
+	if ((eyefi_debug_level >= 3) ||
+	    (eyefi_debug_level >= 2 && (__file == REQM))) {
+		printf("%s:", eyefi_file_name(__file));
 		dumpbuf(eyefi_buf, 128);
+	}
 	wrote = write(fd, eyefi_buf, EYEFI_BUF_SIZE);
 	if (wrote < 0)
 		open_error(file, wrote);
@@ -303,7 +373,7 @@ int wait_for_response(void)
 	inc_seq();
 	for (i = 0; i < 50; i++) {
 		struct card_seq_num cardseq = read_seq_from(RSPC);
-		debug_printf(3, "read rsp code: %x, looking for: %x raw: %x\n", rsp, eyefi_current_seq(),
+		debug_printf(4, "read rsp code: %x, looking for: %x raw: %x\n", rsp, eyefi_current_seq(),
 				cardseq.seq);
 		rsp = cardseq.seq;
 		if (rsp == eyefi_current_seq()) {
@@ -320,19 +390,19 @@ int wait_for_response(void)
 		debug_printf(1, "never saw card seq response\n");
 		return -1;
 	}
-	debug_printf(3, "got good seq (%d), reading RSPM...\n", rsp);
+	debug_printf(4, "got good seq (%d), reading RSPM...\n", rsp);
 	read_from(RSPM);
-	debug_printf(3, "done reading RSPM\n");
+	debug_printf(4, "done reading RSPM\n");
 	return 0;
 }
 
 char *net_test_states[] = {
-       "not scanning",
-       "locating network",
-       "verifying network key",
-       "waiting for DHCP",
-       "testing connection to Eye-Fi server",
-       "success",
+	"not scanning",
+	"locating network",
+	"verifying network key",
+	"waiting for DHCP",
+	"testing connection to Eye-Fi server",
+	"success",
 };
 
 char *net_test_state_name(u8 state)
@@ -482,15 +552,28 @@ struct card_firmware_info *fetch_card_firmware_info(void)
 	return NULL;
 }
 
+int var_byte_len(struct var_byte_response *vb)
+{
+	// Make sure to include the length of the length
+	// byte itself!
+	return sizeof(vb->len) + vb->len;
+}
+
+
+#define offsetof(TYPE, MEMBER) ((size_t) &((TYPE *)0)->MEMBER)
 int card_config_set(enum card_info_subcommand cmd, struct var_byte_response *args)
 {
+	int len;
 	struct card_config_cmd req;
 	req.O = 'O';
 	req.subcommand = cmd;
 	req.arg.len = args->len;
 	memcpy(&req.arg.bytes[0], &args->bytes[0], args->len);
 
-	write_struct(REQM, &req);
+	// try to write a sane number of bytes
+	len = offsetof(struct card_config_cmd, arg) + var_byte_len(args);
+	debug_printf(2, "%s() writing %d bytes (%ld + %d)\n", __func__, len, offsetof(struct card_config_cmd, arg), var_byte_len(args));
+	write_to(REQM, &req, len);
 	return wait_for_response();
 }
 
@@ -498,7 +581,7 @@ void fill_with_int(struct var_byte_response *arg, int fill)
 {
 	// TODO bounds check the int
 	arg->len = 1;
-	arg->bytes[0].response = fill;
+	arg->bytes[0] = fill;
 }
 
 #define ENDLESS_ENABLED_BIT	0x80
@@ -515,7 +598,7 @@ u8 __get_endless_percentage(void)
 	struct var_byte_response *rsp;
 	card_info_cmd(ENDLESS);
 	rsp = eyefi_buf;
-	result = rsp->bytes[0].response;
+	result = rsp->bytes[0];
 	return result;
 }
 
@@ -553,47 +636,46 @@ void print_endless(void)
 	printf(", triggers at %d%% full\n", percent);
 }
 
+void config_int_set(enum card_info_subcommand subcommand, int set_to)
+{
+	struct var_byte_response args;
+	fill_with_int(&args, set_to);
+	card_config_set(subcommand, &args);
+	wait_for_response();
+}
+
+int config_int_get(enum card_info_subcommand subcommand)
+{
+	struct var_byte_response *rsp;
+	card_info_cmd(subcommand);
+	rsp = eyefi_buf;
+	return (rsp->bytes[0] & 0xff);
+}
 
 void wlan_disable(int do_disable)
 {
-	/*
-	 * This is complete voodoo to me.  I've only ever seen
-	 * a single example of this, so it's hard to figure out
-	 * the structure at all.
-	 */
-	char new_cmd[] = {'O', 0x0a, do_disable};
-	write_to(REQM, &new_cmd[0], 3);
-        wait_for_response();
+	struct card_config_cmd req;
+	req.O = 'O';
+	req.subcommand = WLAN_DISABLE;
+	req.u8_args[0] = do_disable;
+	req.u8_args[1] = do_disable;
+	write_to(REQM, &req, offsetof(struct card_config_cmd, u8_args) + 1);
+	wait_for_response();
 }
 
 int wlan_enabled(void)
 {
-	struct var_byte_response *rsp;
-        card_info_cmd(WLAN_ENABLED);
-        rsp = eyefi_buf;
-	return rsp->bytes[0].response;
+	return config_int_get(WLAN_DISABLE);
 }
 
 enum transfer_mode fetch_transfer_mode(void)
 {
-	struct var_byte_response *rsp;
-        card_info_cmd(TRANSFER_MODE);
-        rsp = eyefi_buf;
-	return rsp->bytes[0].response;
+	return config_int_get(TRANSFER_MODE);
 }
 
 void set_transfer_mode(enum transfer_mode transfer_mode)
 {
-	/*
-	 * I think these 'O' commands are the "set" version
-	 * of the little 'o' commands which are "gets".
-	 *
-	 * I think the 0x1 here is the length of the next
-	 * argument.
-	 */
-	char new_cmd[] = {'O', TRANSFER_MODE, 0x1, transfer_mode};
-	write_to(REQM, &new_cmd[0], 4);
-        wait_for_response();
+	config_int_set(TRANSFER_MODE, transfer_mode);
 }
 
 void print_transfer_status(void)
@@ -639,6 +721,75 @@ void print_transfer_status(void)
 	zero_card_files();
 }
 
+#define DIRECT_WAIT_FOREVER ((u8)0xff)
+
+/* obviously not thread safe with a static buffer */
+char *secsprint(int secs)
+{
+	static char buffer[] = "indefinitely";
+	if (secs == DIRECT_WAIT_FOREVER)
+		sprintf(buffer, "indefinitely");
+	else
+		sprintf(buffer, "%d seconds", secs);
+	return buffer;
+}
+
+void print_direct_status(void)
+{
+	int wait_for_secs   = config_int_get(DIRECT_WAIT_FOR_CONNECTION);
+	int wait_after_secs = config_int_get(DIRECT_WAIT_AFTER_TRANSFER);
+
+	printf("Direct mode is: ");
+	if (!wait_for_secs) {
+		printf("disabled\n");
+		return;
+	}
+	printf("enabled\n");
+	printf("The Direct Mode network will:\n");
+	printf("\twait for %s for a device to connect\n", secsprint(wait_for_secs));
+	printf("\tstay on %s after the last item is received\n", secsprint(wait_after_secs));
+}
+
+int direct_mode_enabled(void)
+{
+	int wait_for_secs = config_int_get(DIRECT_WAIT_FOR_CONNECTION);
+	if (wait_for_secs > 0)
+		return 1;
+	return 0;
+}
+
+void disable_direct_mode(void)
+{
+	// DIRECT_WAIT_FOR_CONNECTION=0 appears to be the trigger
+	// to keep direct mode on and off.  But, no matter what
+	// DIRECT_WAIT_AFTER_TRANSFER was set to before the mode
+	// is disabled, the official software seems to set it to
+	// 60 seconds during a disable operation
+	config_int_set(DIRECT_WAIT_FOR_CONNECTION,  0);
+	config_int_set(DIRECT_WAIT_AFTER_TRANSFER, 60);
+}
+
+void enable_direct_mode(int wait_for_secs, int wait_after_secs)
+{
+	config_int_set(DIRECT_WAIT_FOR_CONNECTION, wait_for_secs);
+	config_int_set(DIRECT_WAIT_AFTER_TRANSFER, wait_after_secs);
+	print_direct_status();
+}
+
+int start_direct(void)
+{
+	int ret;
+	if (!direct_mode_enabled()) {
+		printf("Direct mode disabled, unable to start access point.\n");
+		return -EINVAL;
+	}
+	debug_printf(2, "%s()\n", __func__);
+	ret = issue_noarg_command('S');
+	printf("AP started (%d)\n", ret);
+	return ret;
+}
+
+
 struct testbuf {
 	char cmd;
 	u8 l1;
@@ -671,17 +822,26 @@ void testit0(void)
 	int i;
 	int fdin;
 	int fdout;
+
+	//start_direct();
+	print_direct_status();
+	enable_direct_mode(60, 120);
+	exit(0);
 	//char new_cmd[] = {'O', 0x06, 0x0d, 0x0a, 0x31, 0x30, 0x2e, 0x36, 0x2e, 0x30, 0x2e, 0x31, 0x33, 0x37};
 
 	//printf("waiting...\n");
 	//print_transfer_status();
 	//exit(0);
-	int doagain = 1;
+	//int doagain = 1;
 	//wlan_disable(0);
 	//int to_test[] = {5, 8, 9, 11, 15, 16, 255, -1};
 	int to_test[] = {0xFF, -1};
 
 	zero_card_files();
+	for (i = 0; i < 100; i++) {
+		print_transfer_status();
+	}
+	exit(0);
 	while (1) {
 	//fprintf(stderr, "testing...\n");
 	for (i = 0; i < 255; i++) {
@@ -877,7 +1037,7 @@ int network_action(char cmd, char *essid, char *ascii_password)
 	nr.essid_len = strlen(essid);
 
 	if (ascii_password) {
-       		int ret = make_network_key(&nr.key, essid, ascii_password);
+		int ret = make_network_key(&nr.key, essid, ascii_password);
 		if (ret)
 			return ret;
 	}

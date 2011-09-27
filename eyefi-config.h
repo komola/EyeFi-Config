@@ -155,13 +155,9 @@ struct pascal_string {
 	u8 value[32];
 } __attribute__((packed));
 
-struct byte_response {
-	u8 response;
-};
-
 struct var_byte_response {
 	u8 len;
-	struct byte_response bytes[16383];
+	u8 bytes[EYEFI_BUF_SIZE-1];
 };
 
 /*
@@ -175,14 +171,16 @@ enum card_info_subcommand {
 	UNKNOWN_5     = 5, // Chris says these are 
 	UNKNOWN_6     = 6, // checksums
 	LOG_LEN	      = 7,
-	WLAN_ENABLED  = 10,
+	WLAN_DISABLE  = 10, // 1=disable 0=enable, write is 1 byte, read is var_byte
 	UPLOAD_PENDING= 11, // {0x1, STATE}
+	HOTSPOT_ENABLE= 12, // {0x1, STATE}
 	CONNECTED_TO  = 13, // Currently connected Wifi network
 	UPLOAD_STATUS = 14, // current uploading file info
 	UNKNOWN_15    = 15, // always returns {0x01, 0x1d} as far as I've seen
 	TRANSFER_MODE = 17,
-
 	ENDLESS	      = 27,
+	DIRECT_WAIT_FOR_CONNECTION = 0x24, // 0 == "direct mode off"
+	DIRECT_WAIT_AFTER_TRANSFER = 0x25, // set to 60 when direct mode off
 	UNKNOWN_ff    = 0xff, // The D90 does this, and it looks to
 			      // return a 1-byte response length
 			      // followed by a number of 8-byte responses
@@ -215,6 +213,7 @@ struct card_config_cmd {
 	u8 O;
 	u8 subcommand;
 	union {
+		u8 u8_args[0];
 		struct var_byte_response arg;
 	};
 } __attribute__((packed));
@@ -341,6 +340,9 @@ struct rest_log_response {
 
 struct upload_status {
 	u8 len;
+	// These are _transfer_ sizes.  There's some padding probably for
+	// wifi metadata or something, so these end up being larger than
+	// the actual on-disk sizes of the jpgs or movies.
 	be32 http_len;
 	be32 http_done;
 	// There are two strings in here:
@@ -370,6 +372,7 @@ int issue_noarg_command(u8 cmd);
 char *net_test_state_name(u8 state);
 int network_action(char cmd, char *essid, char *wpa_ascii);
 char *locate_eyefi_mount(void);
+void eject_card(void);
 int get_log_into(u8 *resbuf);
 void reboot_card(void);
 void init_card(void);
@@ -385,11 +388,13 @@ void print_endless(void);
  * Only used by the unix variants
  */
 enum eyefi_file {
+	RDIR = 0,
 	REQC,
 	REQM,
 	RSPC,
 	RSPM
 };
 char *eyefi_file_on(enum eyefi_file file, char *mnt);
+char *eyefi_file_name(enum eyefi_file file);
 int atoh(char c);
 #endif // _EYEFI_CONFIG_H
