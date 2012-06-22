@@ -28,10 +28,10 @@ int eyefi_printf(const char *fmt, ...)
 char *eyefi_file_name(enum eyefi_file file)
 {
 	switch (file) {
-	case REQC: return "reqc";
-	case REQM: return "reqm";
-	case RSPC: return "rspc";
-	case RSPM: return "rspm";
+	case REQC: return "REQC";
+	case REQM: return "REQM";
+	case RSPC: return "RSPC";
+	case RSPM: return "RSPM";
 	case RDIR: return "";
 	}
 
@@ -46,7 +46,7 @@ char *eyefi_file_on(enum eyefi_file file, char *mnt)
 	if (!full)
 		return NULL;
 
-	sprintf(&full[0], "%s/EyeFi/%s", mnt, filename);
+	sprintf(&full[0], "%s/EYEFI/%s", mnt, filename);
 	debug_printf(4, "eyefile nr: %d on '%s' is: '%s'\n", file, mnt, &full[0]);
 	return full;
 }
